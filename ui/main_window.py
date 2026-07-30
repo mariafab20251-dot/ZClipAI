@@ -109,6 +109,200 @@ class CaptionPreviewWidget(QWidget):
 
         primary = _hex_to_qcolor(cfg.get("primary_color", "#FFFFFF"))
         highlight = _hex_to_qcolor(cfg.get("highlight_color", "#FFD400"), "#FFD400")
+
+
+class VideoPreviewWidget(QWidget):
+    """Large WYSIWYG preview showing actual video frame + effects + captions."""
+
+    SAMPLE_WORDS = ["YOUR", "CAPTIONS", "WILL", "LOOK", "LIKE", "THIS"]
+    HIGHLIGHT_INDEX = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._frame: Optional[np.ndarray] = None
+        self._cfg: dict = dict(get_preset("boxed_tiktok"))
+        self._effects: dict = {}
+        self.setMinimumSize(280, 420)
+        self.setStyleSheet("background: #1a1a1a; border-radius: 6px;")
+
+    def set_video_path(self, path: Optional[Path]):
+        if path and path.exists():
+            import cv2
+            cap = cv2.VideoCapture(str(path))
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            mid = max(0, total // 2)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
+            ret, frame = cap.read()
+            cap.release()
+            self._frame = frame if ret else None
+        else:
+            self._frame = None
+        self.update()
+
+    def set_style(self, cfg: dict):
+        self._cfg = cfg or {}
+        self.update()
+
+    def set_effects(self, effects: dict):
+        self._effects = effects or {}
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        # Fit frame into widget maintaining 9:16
+        avail_w = self.width() - 8
+        avail_h = self.height() - 8
+        if self._frame is not None:
+            fh, fw = self._frame.shape[:2]
+        else:
+            fw, fh = 1080, 1920
+        scale = min(avail_w / fw, avail_h / fh)
+        dw, dh = int(fw * scale), int(fh * scale)
+        dx = (self.width() - dw) // 2
+        dy = (self.height() - dh) // 2
+
+        frame_rect = QRectF(dx, dy, dw, dh)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#20242b"))
+        p.drawRoundedRect(frame_rect, 8, 8)
+
+        if self._frame is not None:
+            # Apply basic color grade approximation
+            img = self._apply_effects(self._frame.copy())
+            # Convert BGR → RGB → QImage
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h2, w2 = rgb.shape[:2]
+            qimg = QImage(rgb.data, w2, h2, w2 * 3, QImage.Format_RGB888)
+            pix = QPixmap.fromImage(qimg).scaled(dw, dh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            p.drawPixmap(dx, dy, pix)
+        else:
+            p.setBrush(QColor("#2c313a"))
+            p.drawRoundedRect(QRectF(dx, dy, dw, dh * 0.55), 8, 8)
+
+        # Overlay captions
+        self._draw_captions(p, dw, dh, dx, dy)
+
+    def _apply_effects(self, img):
+        eff = self._effects
+        grade = eff.get("grade", "None")
+        if grade == "Warm":
+            img = cv2.addWeighted(img, 1, img, 0, 15)
+            img[:, :, 2] = cv2.add(img[:, :, 2], 20)  # boost R
+        elif grade == "Cool":
+            img[:, :, 0] = cv2.add(img[:, :, 0], 20)   # boost B
+        elif grade == "B&W":
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        elif grade == "Vibrant":
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            hsv[:, :, 1] = cv2.add(hsv[:, :, 1], 30)
+            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        elif grade == "Vintage":
+            img[:, :, 0] = cv2.multiply(img[:, :, 0], 0.85)
+            img[:, :, 2] = cv2.add(img[:, :, 2], 25)
+
+        if eff.get("vignette"):
+            self._apply_vignette(img)
+        if eff.get("grain"):
+            self._apply_grain(img)
+        if eff.get("sharpen"):
+            self._apply_sharpen(img)
+        return img
+
+    def _apply_vignette(self, img):
+        h, w = img.shape[:2]
+        kernel_x = cv2.getGaussianKernel(w, w * 0.3)
+        kernel_y = cv2.getGaussianKernel(h, h * 0.3)
+        mask = kernel_y * kernel_x.T
+        mask = mask / mask.max()
+        for c in range(3):
+            img[:, :, c] = (img[:, :, c] * mask).astype(np.uint8)
+
+    def _apply_grain(self, img):
+        noise = np.random.randint(0, 20, img.shape, dtype=np.uint8)
+        img = cv2.add(img, noise)
+        return img
+
+    def _apply_sharpen(self, img):
+        kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]], dtype=np.float32)
+        return cv2.filter2D(img, -1, kernel)
+
+    def _draw_captions(self, p, dw, dh, dx, dy):
+        cfg = self._cfg
+        uppercase = bool(cfg.get("uppercase", True))
+        words = [w.upper() if uppercase else w.title() for w in self.SAMPLE_WORDS]
+
+        base_size = float(cfg.get("font_size", 80))
+        scale = dh / 1920.0
+        px = max(9, int(round(base_size * scale)))
+        font = QFont(cfg.get("font_family", "Arial") or "Arial")
+        font.setPixelSize(px)
+        font.setBold(bool(cfg.get("bold", True)))
+        p.setFont(font)
+        fm = QFontMetrics(font)
+
+        max_chars = int(cfg.get("max_chars", 20) or 20)
+        max_lines = max(1, int(cfg.get("max_lines", 2) or 2))
+        lines: list[list[int]] = [[]]
+        cur_len = 0
+        for i, w in enumerate(words):
+            add = len(w) + (1 if lines[-1] else 0)
+            if lines[-1] and cur_len + add > max_chars and len(lines) < max_lines:
+                lines.append([i]); cur_len = len(w)
+            else:
+                lines[-1].append(i); cur_len += add
+        lines = [ln for ln in lines if ln]
+
+        primary = _hex_to_qcolor(cfg.get("primary_color", "#FFFFFF"))
+        highlight = _hex_to_qcolor(cfg.get("highlight_color", "#FFD400"), "#FFD400")
+        outline_color = _hex_to_qcolor(cfg.get("outline_color", "#000000"))
+        outline_w = max(0, int(cfg.get("outline_width", 3) * scale))
+        bg_color = _hex_to_qcolor(cfg.get("background_color", "#000000"), "#000000")
+        bg_alpha = min(255, max(0, int(float(cfg.get("background_alpha", 0.6)) * 255)))
+
+        pos = cfg.get("position", "bottom")
+        line_h = fm.height() + 8
+        total_h = len(lines) * line_h
+        margin = int(40 * scale)
+
+        if pos == "top":
+            base_y = dy + margin + line_h
+        elif pos == "center":
+            base_y = dy + (dh - total_h) // 2 + line_h
+        else:
+            base_y = dy + dh - margin - total_h + line_h
+
+        pad = int(12 * scale)
+        box_h = int(line_h * 0.85)
+        round_r = int(8 * scale)
+
+        for line_words in lines:
+            text_parts = [words[i] for i in line_words]
+            full_text = " ".join(text_parts)
+            text_w = fm.horizontalAdvance(full_text) + pad * 2
+
+            bx = dx + (dw - text_w) // 2
+            by = base_y - box_h
+
+            # Background box
+            p.setPen(Qt.NoPen)
+            bg = QColor(bg_color)
+            bg.setAlpha(bg_alpha)
+            p.setBrush(bg)
+            p.drawRoundedRect(bx, by, text_w, box_h, round_r, round_r)
+
+            # Word-level coloring
+            cx = bx + pad
+            for i, w in enumerate(line_words):
+                color = highlight if w == self.SAMPLE_WORDS[self.HIGHLIGHT_INDEX] else primary
+                p.setPen(color)
+                p.drawText(cx, base_y, words[i])
+                cx += fm.horizontalAdvance(words[i]) + fm.horizontalAdvance(" ")
+            base_y += line_h
         outline_px = float(cfg.get("outline_width", cfg.get("outline", 4)) or 0)
         outline_w = max(0.0, outline_px * scale)
         outline_col = _hex_to_qcolor(cfg.get("outline_color", "#000000"), "#000000")
@@ -213,105 +407,105 @@ class MainWindow(QMainWindow):
 
         input_group = QGroupBox("Input Settings")
         input_layout = QVBoxLayout(input_group)
+        input_layout.setSpacing(4)
+        input_layout.setContentsMargins(6, 6, 6, 6)
 
-        video_layout = QHBoxLayout()
+        row1 = QHBoxLayout()
         self.video_label = QLabel("No video selected")
-        self.select_video_btn = QPushButton("Select Video")
-        video_layout.addWidget(self.video_label, 1)
-        video_layout.addWidget(self.select_video_btn)
+        self.video_label.setMaximumWidth(140)
+        self.select_video_btn = QPushButton("Video")
+        self.select_video_btn.setMaximumWidth(60)
+        self.output_label = QLabel("Output")
+        self.output_label.setMaximumWidth(50)
+        self.select_output_btn = QPushButton("Out")
+        self.select_output_btn.setMaximumWidth(40)
+        row1.addWidget(self.video_label)
+        row1.addWidget(self.select_video_btn)
+        row1.addWidget(self.output_label)
+        row1.addWidget(self.select_output_btn)
+        input_layout.addLayout(row1)
 
-        output_layout = QHBoxLayout()
-        self.output_label = QLabel("Output: ./output")
-        self.select_output_btn = QPushButton("Select Output")
-        output_layout.addWidget(self.output_label, 1)
-        output_layout.addWidget(self.select_output_btn)
-
-        params_layout = QHBoxLayout()
-        params_layout.addWidget(QLabel("Number of clips:"))
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Clips:"))
         self.clips_spin = QSpinBox()
         self.clips_spin.setRange(1, 50)
         self.clips_spin.setValue(10)
-        params_layout.addWidget(self.clips_spin)
-
-        params_layout.addWidget(QLabel("Clip length (s):"))
+        self.clips_spin.setMaximumWidth(50)
+        row2.addWidget(self.clips_spin)
+        row2.addWidget(QLabel("Len:"))
         self.duration_spin = QSpinBox()
         self.duration_spin.setRange(15, 120)
         self.duration_spin.setValue(30)
         self.duration_spin.setSuffix("s")
-        params_layout.addWidget(self.duration_spin)
-
-        style_layout = QHBoxLayout()
-        style_layout.addWidget(QLabel("Platform style:"))
-        self.style_combo = QComboBox()
-        self.style_combo.addItems([s.value for s in ClipStyle])
-        style_layout.addWidget(self.style_combo)
-
-        subtitle_layout = QHBoxLayout()
-        self.subtitle_check = QCheckBox("Generate Subtitles")
-        self.subtitle_check.setChecked(True)
-        subtitle_layout.addWidget(self.subtitle_check)
-
-        subtitle_layout.addWidget(QLabel("Aspect Ratio:"))
+        self.duration_spin.setMaximumWidth(60)
+        row2.addWidget(self.duration_spin)
+        row2.addWidget(QLabel("Aspect:"))
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems([
-            "None (Original)",
-            "9:16 Vertical (1080×1920)",
-            "16:9 Landscape (1920×1080)",
-            "4:3 (1440×1080)",
-            "1:1 Square (1080×1080)",
-            "21:9 Ultrawide (2560×1080)"
+            "None", "9:16", "16:9", "4:3", "1:1", "21:9"
         ])
-        self.aspect_combo.setCurrentText("9:16 Vertical (1080×1920)")
-        subtitle_layout.addWidget(self.aspect_combo)
+        self.aspect_combo.setCurrentText("9:16")
+        self.aspect_combo.setMaximumWidth(70)
+        row2.addWidget(self.aspect_combo)
+        input_layout.addLayout(row2)
 
-        input_layout.addLayout(video_layout)
-        input_layout.addLayout(output_layout)
-        input_layout.addLayout(params_layout)
-        input_layout.addLayout(style_layout)
-        input_layout.addLayout(subtitle_layout)
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Style:"))
+        self.style_combo = QComboBox()
+        self.style_combo.addItems([s.value for s in ClipStyle])
+        self.style_combo.setMaximumWidth(90)
+        row3.addWidget(self.style_combo)
+        self.subtitle_check = QCheckBox(" Subs")
+        self.subtitle_check.setChecked(True)
+        row3.addWidget(self.subtitle_check)
+        input_layout.addLayout(row3)
 
         # ---- AI Ranking (optional LLM rerank) -------------------------------
-        ai_group = QGroupBox("AI Ranking (optional)")
+        ai_group = QGroupBox("AI Ranking")
         ai_layout = QVBoxLayout(ai_group)
+        ai_layout.setSpacing(4)
+        ai_layout.setContentsMargins(6, 6, 6, 6)
 
         self.llm_check = QCheckBox("Use AI to rank clips (needs API key)")
         self.llm_check.setChecked(bool(config.get_section("llm").get("enabled", False)))
         ai_layout.addWidget(self.llm_check)
 
-        provider_layout = QHBoxLayout()
-        provider_layout.addWidget(QLabel("Provider:"))
+        row_prov = QHBoxLayout()
+        row_prov.addWidget(QLabel("Prov:"))
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(["gemini", "openai", "anthropic"])
         self.provider_combo.setCurrentText(config.get_section("llm").get("provider", "gemini"))
-        provider_layout.addWidget(self.provider_combo, 1)
-        provider_layout.addWidget(QLabel("Model:"))
+        self.provider_combo.setMaximumWidth(80)
+        row_prov.addWidget(self.provider_combo)
+        row_prov.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)  # allow new models we don't know yet
-        provider_layout.addWidget(self.model_combo, 1)
+        self.model_combo.setEditable(True)
+        self.model_combo.setMaximumWidth(100)
+        row_prov.addWidget(self.model_combo)
         self.refresh_models_btn = QPushButton("↻")
-        self.refresh_models_btn.setToolTip("Fetch the live model list from the provider (uses your API key)")
-        self.refresh_models_btn.setMaximumWidth(32)
-        provider_layout.addWidget(self.refresh_models_btn)
-        ai_layout.addLayout(provider_layout)
+        self.refresh_models_btn.setToolTip("Fetch live model list from the provider (uses your API key)")
+        self.refresh_models_btn.setMaximumWidth(28)
+        row_prov.addWidget(self.refresh_models_btn)
+        ai_layout.addLayout(row_prov)
 
-        key_layout = QHBoxLayout()
-        key_layout.addWidget(QLabel("API Key:"))
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("Key:"))
         self.api_key_input = QLineEdit()
         self.api_key_input.setPlaceholderText("Paste your API key here")
         self.api_key_input.setEchoMode(QLineEdit.Password)
-        key_layout.addWidget(self.api_key_input, 1)
-        self.save_key_btn = QPushButton("Save Key")
-        self.save_key_btn.setMaximumWidth(70)
-        key_layout.addWidget(self.save_key_btn)
-        self.test_key_btn = QPushButton("Test Key")
-        self.test_key_btn.setMaximumWidth(70)
+        key_row.addWidget(self.api_key_input)
+        self.save_key_btn = QPushButton("Save")
+        self.save_key_btn.setMaximumWidth(42)
+        key_row.addWidget(self.save_key_btn)
+        self.test_key_btn = QPushButton("Test")
+        self.test_key_btn.setMaximumWidth(40)
         self.test_key_btn.setToolTip("Test the API key with a lightweight API call")
-        key_layout.addWidget(self.test_key_btn)
+        key_row.addWidget(self.test_key_btn)
         self.show_key_btn = QPushButton("👁")
         self.show_key_btn.setToolTip("Show / hide API key")
-        self.show_key_btn.setMaximumWidth(32)
-        key_layout.addWidget(self.show_key_btn)
-        ai_layout.addLayout(key_layout)
+        self.show_key_btn.setMaximumWidth(26)
+        key_row.addWidget(self.show_key_btn)
+        ai_layout.addLayout(key_row)
 
         self.llm_status_label = QLabel()
         self.llm_status_label.setWordWrap(True)
@@ -320,7 +514,6 @@ class MainWindow(QMainWindow):
 
         self._populate_models(live=False)
         self._update_llm_status()
-        # Load saved API key into the password field
         saved = get_saved_key(self._current_provider())
         if saved:
             self.api_key_input.setText(saved)
@@ -353,10 +546,11 @@ class MainWindow(QMainWindow):
         # ---- Caption Style (presets + fonts + overrides) --------------------------
         caption_group = QGroupBox("Caption Style")
         caption_layout = QVBoxLayout(caption_group)
-        caption_layout.setSpacing(4)
+        caption_layout.setSpacing(3)
+        caption_layout.setContentsMargins(6, 6, 6, 6)
 
-        preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Preset:"))
+        row_pf = QHBoxLayout()
+        row_pf.addWidget(QLabel("Preset:"))
         self.preset_combo = QComboBox()
         for pid, ps in sorted(STYLE_PRESETS.items(), key=lambda x: x[1].get("display_name", x[0])):
             display = ps.get("display_name", pid)
@@ -365,82 +559,84 @@ class MainWindow(QMainWindow):
         idx = self.preset_combo.findData(current_preset)
         if idx >= 0:
             self.preset_combo.setCurrentIndex(idx)
-        preset_row.addWidget(self.preset_combo, 1)
-        caption_layout.addLayout(preset_row)
-
-        font_row = QHBoxLayout()
-        font_row.addWidget(QLabel("Font:"))
+        self.preset_combo.setMaximumWidth(110)
+        row_pf.addWidget(self.preset_combo)
+        row_pf.addWidget(QLabel("Font:"))
         self.font_combo = QComboBox()
-        self.font_combo.addItem("(Preset default)", "")
+        self.font_combo.addItem("(Default)", "")
         fonts_info = list_fonts()
         for cat_name in ("bundled", "multilingual"):
             for f in fonts_info.get(cat_name, []):
                 self.font_combo.addItem(f["family"], f["family"])
-        font_row.addWidget(self.font_combo, 1)
-        caption_layout.addLayout(font_row)
+        self.font_combo.setMaximumWidth(100)
+        row_pf.addWidget(self.font_combo)
+        caption_layout.addLayout(row_pf)
 
-        cap_ov_row = QHBoxLayout()
-        cap_ov_row.addWidget(QLabel("Primary:"))
+        row_clr = QHBoxLayout()
+        row_clr.addWidget(QLabel("Color:"))
         self.caption_color_input = QLineEdit()
-        self.caption_color_input.setPlaceholderText("#FFFFFF")
-        self.caption_color_input.setMaximumWidth(120)
-        cap_ov_row.addWidget(self.caption_color_input)
-        cap_ov_row.addWidget(QLabel("Highlight:"))
+        self.caption_color_input.setPlaceholderText("#FFF")
+        self.caption_color_input.setMaximumWidth(60)
+        row_clr.addWidget(self.caption_color_input)
+        row_clr.addWidget(QLabel("Hl:"))
         self.highlight_color_input = QLineEdit()
         self.highlight_color_input.setPlaceholderText("#FFD400")
-        self.highlight_color_input.setMaximumWidth(120)
-        cap_ov_row.addWidget(self.highlight_color_input)
-        cap_ov_row.addWidget(QLabel("Size:"))
+        self.highlight_color_input.setMaximumWidth(60)
+        row_clr.addWidget(self.highlight_color_input)
+        row_clr.addWidget(QLabel("Sz:"))
         self.caption_size_spin = QSpinBox()
         self.caption_size_spin.setRange(0, 200)
         self.caption_size_spin.setValue(0)
-        self.caption_size_spin.setSuffix(" (0=preset)")
-        cap_ov_row.addWidget(self.caption_size_spin)
-        caption_layout.addLayout(cap_ov_row)
-
-        pos_row = QHBoxLayout()
-        pos_row.addWidget(QLabel("Position:"))
+        self.caption_size_spin.setSuffix("")
+        self.caption_size_spin.setMaximumWidth(50)
+        row_clr.addWidget(self.caption_size_spin)
+        row_clr.addWidget(QLabel("Pos:"))
         self.caption_position_combo = QComboBox()
         self.caption_position_combo.addItem("Top", "top")
-        self.caption_position_combo.addItem("Center", "center")
-        self.caption_position_combo.addItem("Bottom", "bottom")
-        # Default from the currently selected preset.
+        self.caption_position_combo.addItem("Mid", "center")
+        self.caption_position_combo.addItem("Bot", "bottom")
         _cur_preset = get_preset(config.get_section("subtitles").get("style", "boxed_tiktok"))
         _pidx = self.caption_position_combo.findData(_cur_preset.get("position", "bottom"))
         if _pidx >= 0:
             self.caption_position_combo.setCurrentIndex(_pidx)
-        pos_row.addWidget(self.caption_position_combo, 1)
-        caption_layout.addLayout(pos_row)
+        self.caption_position_combo.setMaximumWidth(60)
+        row_clr.addWidget(self.caption_position_combo)
+        caption_layout.addLayout(row_clr)
 
-        self.hinglish_check = QCheckBox("Hinglish transliteration (Hindi → Romanized)")
+        self.hinglish_check = QCheckBox("Hinglish (Hindi → Romanized)")
         self.hinglish_check.setToolTip("Convert Hindi/Devanagari captions to readable Hinglish text")
         caption_layout.addWidget(self.hinglish_check)
 
-        # Live preview of the caption look (updates as controls change).
-        caption_layout.addWidget(QLabel("Preview:"))
+        # Live preview (compact)
         self.caption_preview = CaptionPreviewWidget()
+        self.caption_preview.setMinimumHeight(100)
         caption_layout.addWidget(self.caption_preview, 1)
 
         # ---- Cinematic Effects ----------------------------------------------------
         effects_group = QGroupBox("Cinematic Effects")
         effects_layout = QVBoxLayout(effects_group)
+        effects_layout.setSpacing(4)
+        effects_layout.setContentsMargins(6, 6, 6, 6)
 
         grade_row = QHBoxLayout()
-        grade_row.addWidget(QLabel("Color Grade:"))
+        grade_row.addWidget(QLabel("Grade:"))
         self.grade_combo = QComboBox()
         self.grade_combo.addItems(["None", "Warm", "Cool", "Teal/Orange", "Vintage", "Vibrant", "B&W"])
         self.grade_combo.setCurrentText("Warm")
-        grade_row.addWidget(self.grade_combo, 1)
+        self.grade_combo.setMaximumWidth(110)
+        grade_row.addWidget(self.grade_combo)
+        grade_row.addStretch()
         effects_layout.addLayout(grade_row)
 
         fx_grid = QVBoxLayout()
+        fx_grid.setSpacing(2)
         self.fx_checks = {}
         self.fx_sliders = {}
         for fx_id, fx_label in [
-            ("glow", "Glow"), ("grain", "Film Grain"), ("vignette", "Vignette"),
-            ("bottom_gradient", "Bottom Gradient"), ("top_gradient", "Top Gradient"),
-            ("letterbox", "Letterbox Bars"), ("sharpen", "Sharpen"),
-            ("chroma_shift", "Chromatic Aberration"),
+            ("glow", "Glow"), ("grain", "Grain"), ("vignette", "Vignette"),
+            ("bottom_gradient", "BotGrad"), ("top_gradient", "TopGrad"),
+            ("letterbox", "Bars"), ("sharpen", "Sharpen"),
+            ("chroma_shift", "Chroma"),
         ]:
             row = QHBoxLayout()
             cb = QCheckBox(fx_label)
@@ -450,7 +646,7 @@ class MainWindow(QMainWindow):
             slider.setRange(0, 100)
             slider.setValue(50)
             slider.setEnabled(False)
-            slider.setMaximumWidth(120)
+            slider.setMaximumWidth(60)
             self.fx_sliders[fx_id] = slider
             row.addWidget(slider)
             row.addStretch()
@@ -469,21 +665,24 @@ class MainWindow(QMainWindow):
         options_grid.addWidget(effects_group, 1, 1)
 
         # ---- Background Music ----------------------------------------------------
-        music_group = QGroupBox("Background Music")
+        music_group = QGroupBox("Music")
         music_layout = QVBoxLayout(music_group)
+        music_layout.setSpacing(4)
+        music_layout.setContentsMargins(6, 6, 6, 6)
 
-        self.music_check = QCheckBox("Enable Background Music (sidechain ducking)")
+        self.music_check = QCheckBox("Enable (sidechain ducking)")
         music_layout.addWidget(self.music_check)
 
         music_folder_row = QHBoxLayout()
-        self.music_folder_label = QLabel("No folder selected")
-        self.select_music_btn = QPushButton("Select Music Folder")
+        self.music_folder_label = QLabel("No folder")
+        self.select_music_btn = QPushButton("Select Folder")
+        self.select_music_btn.setMaximumWidth(100)
         music_folder_row.addWidget(self.music_folder_label, 1)
         music_folder_row.addWidget(self.select_music_btn)
         music_layout.addLayout(music_folder_row)
 
         music_vol_row = QHBoxLayout()
-        music_vol_row.addWidget(QLabel("Volume:"))
+        music_vol_row.addWidget(QLabel("Vol:"))
         self.music_volume_slider = QSlider(Qt.Horizontal)
         self.music_volume_slider.setRange(0, 100)
         self.music_volume_slider.setValue(30)
@@ -493,7 +692,7 @@ class MainWindow(QMainWindow):
         music_layout.addLayout(music_vol_row)
 
         duck_row = QHBoxLayout()
-        duck_row.addWidget(QLabel("Ducking:"))
+        duck_row.addWidget(QLabel("Duck:"))
         self.music_duck_slider = QSlider(Qt.Horizontal)
         self.music_duck_slider.setRange(0, 100)
         self.music_duck_slider.setValue(50)
@@ -540,11 +739,18 @@ class MainWindow(QMainWindow):
         jobs_layout.addWidget(self.jobs_list)
         tabs.addTab(jobs_tab, "Job History")
 
+        preview_tab = QWidget()
+        preview_layout = QVBoxLayout(preview_tab)
+        preview_layout.setContentsMargins(6, 6, 6, 6)
+        self.video_preview = VideoPreviewWidget()
+        preview_layout.addWidget(self.video_preview)
+        tabs.addTab(preview_tab, "Preview")
+
         right_layout.addWidget(tabs)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([560, 640])
+        splitter.setSizes([380, 820])
 
         main_layout.addWidget(splitter)
 
@@ -578,6 +784,12 @@ class MainWindow(QMainWindow):
         self.caption_position_combo.currentIndexChanged.connect(self._on_preset_or_position_changed)
         self._update_caption_preview()
 
+        # Live video preview — refresh whenever effects controls change.
+        self.grade_combo.currentTextChanged.connect(self._update_effects_preview)
+        for fx_cb in self.fx_checks.values():
+            fx_cb.toggled.connect(self._update_effects_preview)
+        self._update_effects_preview()
+
     def _on_preset_or_position_changed(self, *_):
         self._update_caption_preview()
 
@@ -605,7 +817,19 @@ class MainWindow(QMainWindow):
 
     def _update_caption_preview(self, *_):
         if hasattr(self, "caption_preview"):
-            self.caption_preview.set_style(self._current_caption_style())
+            style = self._current_caption_style()
+            self.caption_preview.set_style(style)
+            if hasattr(self, "video_preview"):
+                self.video_preview.set_style(style)
+
+    def _update_effects_preview(self, *_):
+        if hasattr(self, "video_preview"):
+            effects = {
+                "grade": self.grade_combo.currentText(),
+            }
+            for fx_id, cb in self.fx_checks.items():
+                effects[fx_id] = cb.isChecked()
+            self.video_preview.set_effects(effects)
 
     # ---- AI Ranking helpers --------------------------------------------------
     def _current_provider(self) -> str:
@@ -738,6 +962,7 @@ class MainWindow(QMainWindow):
             self.video_path = Path(path)
             self.video_label.setText(self.video_path.name)
             logger.info("Video selected", path=path)
+            self.video_preview.set_video_path(self.video_path)
 
     def _select_output(self):
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
