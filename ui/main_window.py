@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QSpinBox,
     QProgressBar, QListWidget, QTextEdit, QFileDialog,
-    QGroupBox, QCheckBox, QTabWidget, QSplitter,
+    QGroupBox, QCheckBox, QTabWidget, QSplitter, QGridLayout,
     QMessageBox, QSlider, QScrollArea, QLineEdit,
     QApplication
 )
@@ -50,7 +50,7 @@ class CaptionPreviewWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._cfg: dict = dict(get_preset("boxed_tiktok"))
-        self.setMinimumHeight(260)
+        self.setMinimumHeight(140)
         self.setMinimumWidth(200)
 
     def set_style(self, cfg: dict):
@@ -350,12 +350,10 @@ class MainWindow(QMainWindow):
         progress_layout.addWidget(self.step_label)
         progress_layout.addWidget(self.progress_bar)
 
-        left_layout.addWidget(input_group)
-        left_layout.addWidget(ai_group)
-
         # ---- Caption Style (presets + fonts + overrides) --------------------------
         caption_group = QGroupBox("Caption Style")
         caption_layout = QVBoxLayout(caption_group)
+        caption_layout.setSpacing(4)
 
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("Preset:"))
@@ -460,11 +458,15 @@ class MainWindow(QMainWindow):
             cb.toggled.connect(lambda checked, s=slider: s.setEnabled(checked))
         effects_layout.addLayout(fx_grid)
 
-        # Side by side: Caption Style | Cinematic Effects
-        side_row = QHBoxLayout()
-        side_row.addWidget(caption_group)
-        side_row.addWidget(effects_group)
-        left_layout.addLayout(side_row)
+        # ---- 2-column options grid (sleek & compact) --------------------------
+        options_grid = QGridLayout()
+        options_grid.setSpacing(6)
+        options_grid.setContentsMargins(0, 0, 0, 0)
+
+        options_grid.addWidget(input_group, 0, 0)
+        options_grid.addWidget(ai_group, 0, 1)
+        options_grid.addWidget(caption_group, 1, 0)
+        options_grid.addWidget(effects_group, 1, 1)
 
         # ---- Background Music ----------------------------------------------------
         music_group = QGroupBox("Background Music")
@@ -504,7 +506,9 @@ class MainWindow(QMainWindow):
         self.music_random_check.setChecked(True)
         music_layout.addWidget(self.music_random_check)
 
-        left_layout.addWidget(music_group)
+        options_grid.addWidget(music_group, 2, 0, 1, 2)
+
+        left_layout.addLayout(options_grid)
 
         left_layout.addLayout(control_layout)
         left_layout.addWidget(progress_group)
@@ -540,7 +544,7 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([400, 800])
+        splitter.setSizes([560, 640])
 
         main_layout.addWidget(splitter)
 
