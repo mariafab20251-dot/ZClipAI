@@ -1,0 +1,48 @@
+# ---- Secrets (NEVER commit) ----
+.env
+.env.*
+!.env.example
+api_keys.json
+*.key
+*_api_key*
+secrets.*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ---- App runtime artifacts ----
+cache/
+temp/
+logs/
+output/
+data/
+models/
+
+# ---- Large binaries ----
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.whl
+*.zip
+*.7z
+*.tar.gz
+
+# ---- Temp CUDA install artifacts ----
+cudnn_bin/
+_venv_install.log
+onnxruntime_gpu-*.whl
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
