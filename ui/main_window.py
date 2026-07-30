@@ -407,19 +407,15 @@ class MainWindow(QMainWindow):
 
         input_group = QGroupBox("Input Settings")
         input_layout = QVBoxLayout(input_group)
-        input_layout.setSpacing(4)
+        input_layout.setSpacing(3)
         input_layout.setContentsMargins(6, 6, 6, 6)
 
         row1 = QHBoxLayout()
         self.video_label = QLabel("No video selected")
-        self.video_label.setMaximumWidth(140)
-        self.select_video_btn = QPushButton("Video")
-        self.select_video_btn.setMaximumWidth(60)
-        self.output_label = QLabel("Output")
-        self.output_label.setMaximumWidth(50)
-        self.select_output_btn = QPushButton("Out")
-        self.select_output_btn.setMaximumWidth(40)
-        row1.addWidget(self.video_label)
+        self.select_video_btn = QPushButton("Select Video")
+        self.output_label = QLabel("Output Dir")
+        self.select_output_btn = QPushButton("Browse")
+        row1.addWidget(self.video_label, 1)
         row1.addWidget(self.select_video_btn)
         row1.addWidget(self.output_label)
         row1.addWidget(self.select_output_btn)
@@ -430,14 +426,14 @@ class MainWindow(QMainWindow):
         self.clips_spin = QSpinBox()
         self.clips_spin.setRange(1, 50)
         self.clips_spin.setValue(10)
-        self.clips_spin.setMaximumWidth(50)
+        self.clips_spin.setMaximumWidth(55)
         row2.addWidget(self.clips_spin)
-        row2.addWidget(QLabel("Len:"))
+        row2.addWidget(QLabel("Length:"))
         self.duration_spin = QSpinBox()
         self.duration_spin.setRange(15, 120)
         self.duration_spin.setValue(30)
         self.duration_spin.setSuffix("s")
-        self.duration_spin.setMaximumWidth(60)
+        self.duration_spin.setMaximumWidth(65)
         row2.addWidget(self.duration_spin)
         row2.addWidget(QLabel("Aspect:"))
         self.aspect_combo = QComboBox()
@@ -445,7 +441,7 @@ class MainWindow(QMainWindow):
             "None", "9:16", "16:9", "4:3", "1:1", "21:9"
         ])
         self.aspect_combo.setCurrentText("9:16")
-        self.aspect_combo.setMaximumWidth(70)
+        self.aspect_combo.setMaximumWidth(80)
         row2.addWidget(self.aspect_combo)
         input_layout.addLayout(row2)
 
@@ -453,9 +449,9 @@ class MainWindow(QMainWindow):
         row3.addWidget(QLabel("Style:"))
         self.style_combo = QComboBox()
         self.style_combo.addItems([s.value for s in ClipStyle])
-        self.style_combo.setMaximumWidth(90)
+        self.style_combo.setMaximumWidth(100)
         row3.addWidget(self.style_combo)
-        self.subtitle_check = QCheckBox(" Subs")
+        self.subtitle_check = QCheckBox("Subtitles")
         self.subtitle_check.setChecked(True)
         row3.addWidget(self.subtitle_check)
         input_layout.addLayout(row3)
@@ -463,7 +459,7 @@ class MainWindow(QMainWindow):
         # ---- AI Ranking (optional LLM rerank) -------------------------------
         ai_group = QGroupBox("AI Ranking")
         ai_layout = QVBoxLayout(ai_group)
-        ai_layout.setSpacing(4)
+        ai_layout.setSpacing(3)
         ai_layout.setContentsMargins(6, 6, 6, 6)
 
         self.llm_check = QCheckBox("Use AI to rank clips (needs API key)")
@@ -471,16 +467,16 @@ class MainWindow(QMainWindow):
         ai_layout.addWidget(self.llm_check)
 
         row_prov = QHBoxLayout()
-        row_prov.addWidget(QLabel("Prov:"))
+        row_prov.addWidget(QLabel("Provider:"))
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(["gemini", "openai", "anthropic"])
         self.provider_combo.setCurrentText(config.get_section("llm").get("provider", "gemini"))
-        self.provider_combo.setMaximumWidth(80)
+        self.provider_combo.setMaximumWidth(100)
         row_prov.addWidget(self.provider_combo)
         row_prov.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        self.model_combo.setMaximumWidth(100)
+        self.model_combo.setMaximumWidth(110)
         row_prov.addWidget(self.model_combo)
         self.refresh_models_btn = QPushButton("↻")
         self.refresh_models_btn.setToolTip("Fetch live model list from the provider (uses your API key)")
@@ -489,21 +485,21 @@ class MainWindow(QMainWindow):
         ai_layout.addLayout(row_prov)
 
         key_row = QHBoxLayout()
-        key_row.addWidget(QLabel("Key:"))
+        key_row.addWidget(QLabel("API Key:"))
         self.api_key_input = QLineEdit()
         self.api_key_input.setPlaceholderText("Paste your API key here")
         self.api_key_input.setEchoMode(QLineEdit.Password)
         key_row.addWidget(self.api_key_input)
         self.save_key_btn = QPushButton("Save")
-        self.save_key_btn.setMaximumWidth(42)
+        self.save_key_btn.setMaximumWidth(50)
         key_row.addWidget(self.save_key_btn)
         self.test_key_btn = QPushButton("Test")
-        self.test_key_btn.setMaximumWidth(40)
+        self.test_key_btn.setMaximumWidth(50)
         self.test_key_btn.setToolTip("Test the API key with a lightweight API call")
         key_row.addWidget(self.test_key_btn)
         self.show_key_btn = QPushButton("👁")
         self.show_key_btn.setToolTip("Show / hide API key")
-        self.show_key_btn.setMaximumWidth(26)
+        self.show_key_btn.setMaximumWidth(28)
         key_row.addWidget(self.show_key_btn)
         ai_layout.addLayout(key_row)
 
@@ -615,43 +611,43 @@ class MainWindow(QMainWindow):
         # ---- Cinematic Effects ----------------------------------------------------
         effects_group = QGroupBox("Cinematic Effects")
         effects_layout = QVBoxLayout(effects_group)
-        effects_layout.setSpacing(4)
+        effects_layout.setSpacing(3)
         effects_layout.setContentsMargins(6, 6, 6, 6)
 
         grade_row = QHBoxLayout()
-        grade_row.addWidget(QLabel("Grade:"))
+        grade_row.addWidget(QLabel("Color Grade:"))
         self.grade_combo = QComboBox()
         self.grade_combo.addItems(["None", "Warm", "Cool", "Teal/Orange", "Vintage", "Vibrant", "B&W"])
         self.grade_combo.setCurrentText("Warm")
-        self.grade_combo.setMaximumWidth(110)
         grade_row.addWidget(self.grade_combo)
         grade_row.addStretch()
         effects_layout.addLayout(grade_row)
 
-        fx_grid = QVBoxLayout()
-        fx_grid.setSpacing(2)
+        fx_grid = QGridLayout()
+        fx_grid.setSpacing(4)
         self.fx_checks = {}
         self.fx_sliders = {}
-        for fx_id, fx_label in [
-            ("glow", "Glow"), ("grain", "Grain"), ("vignette", "Vignette"),
-            ("bottom_gradient", "BotGrad"), ("top_gradient", "TopGrad"),
-            ("letterbox", "Bars"), ("sharpen", "Sharpen"),
-            ("chroma_shift", "Chroma"),
-        ]:
-            row = QHBoxLayout()
+        fx_items = [
+            ("glow", "Glow"), ("grain", "Film Grain"), ("vignette", "Vignette"),
+            ("sharpen", "Sharpen"), ("letterbox", "Letterbox"), ("chroma_shift", "Chroma Shift"),
+            ("bottom_gradient", "Bot Gradient"), ("top_gradient", "Top Gradient"),
+        ]
+        for idx, (fx_id, fx_label) in enumerate(fx_items):
+            row_idx = idx // 2
+            col_idx = idx % 2
+            sub = QHBoxLayout()
             cb = QCheckBox(fx_label)
             self.fx_checks[fx_id] = cb
-            row.addWidget(cb)
+            sub.addWidget(cb)
             slider = QSlider(Qt.Horizontal)
             slider.setRange(0, 100)
             slider.setValue(50)
             slider.setEnabled(False)
             slider.setMaximumWidth(60)
             self.fx_sliders[fx_id] = slider
-            row.addWidget(slider)
-            row.addStretch()
-            fx_grid.addLayout(row)
+            sub.addWidget(slider)
             cb.toggled.connect(lambda checked, s=slider: s.setEnabled(checked))
+            fx_grid.addLayout(sub, row_idx, col_idx)
         effects_layout.addLayout(fx_grid)
 
         # ---- 2-column options grid (sleek & compact) --------------------------
@@ -665,34 +661,33 @@ class MainWindow(QMainWindow):
         options_grid.addWidget(effects_group, 1, 1)
 
         # ---- Background Music ----------------------------------------------------
-        music_group = QGroupBox("Music")
+        music_group = QGroupBox("Background Music")
         music_layout = QVBoxLayout(music_group)
-        music_layout.setSpacing(4)
+        music_layout.setSpacing(3)
         music_layout.setContentsMargins(6, 6, 6, 6)
 
-        self.music_check = QCheckBox("Enable (sidechain ducking)")
+        self.music_check = QCheckBox("Enable background music (sidechain ducking)")
         music_layout.addWidget(self.music_check)
 
         music_folder_row = QHBoxLayout()
-        self.music_folder_label = QLabel("No folder")
+        self.music_folder_label = QLabel("No folder selected")
         self.select_music_btn = QPushButton("Select Folder")
-        self.select_music_btn.setMaximumWidth(100)
         music_folder_row.addWidget(self.music_folder_label, 1)
         music_folder_row.addWidget(self.select_music_btn)
         music_layout.addLayout(music_folder_row)
 
-        music_vol_row = QHBoxLayout()
-        music_vol_row.addWidget(QLabel("Vol:"))
+        vol_row = QHBoxLayout()
+        vol_row.addWidget(QLabel("Volume:"))
         self.music_volume_slider = QSlider(Qt.Horizontal)
         self.music_volume_slider.setRange(0, 100)
         self.music_volume_slider.setValue(30)
-        music_vol_row.addWidget(self.music_volume_slider, 1)
+        vol_row.addWidget(self.music_volume_slider, 1)
         self.music_volume_label = QLabel("30%")
-        music_vol_row.addWidget(self.music_volume_label)
-        music_layout.addLayout(music_vol_row)
+        vol_row.addWidget(self.music_volume_label)
+        music_layout.addLayout(vol_row)
 
         duck_row = QHBoxLayout()
-        duck_row.addWidget(QLabel("Duck:"))
+        duck_row.addWidget(QLabel("Ducking:"))
         self.music_duck_slider = QSlider(Qt.Horizontal)
         self.music_duck_slider.setRange(0, 100)
         self.music_duck_slider.setValue(50)
@@ -750,7 +745,7 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([380, 820])
+        splitter.setSizes([440, 760])
 
         main_layout.addWidget(splitter)
 
