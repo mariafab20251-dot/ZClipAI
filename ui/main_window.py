@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QDateTime, QRectF
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath, QColor, QPen, QBrush, QFontMetrics
 import os
+import numpy as np
 from core.models import Job, JobStatus, Clip, ClipStyle
 from core.job_manager import JobManager
 from core.pipeline import Pipeline
@@ -127,6 +128,191 @@ class CaptionPreviewWidget(QWidget):
         elif position == "center":
             y0 = frame.top() + (frame_h - block_h) / 2
         else:  # bottom
+            y0 = frame.bottom() - margin - block_h
+
+        for li, ln in enumerate(lines):
+            widths = [fm.horizontalAdvance(words[i]) for i in ln]
+            total_w = sum(widths) + space_w * (len(ln) - 1)
+            x = frame.center().x() - total_w / 2
+            y = y0 + li * line_h
+            baseline = y + fm.ascent()
+
+            if bg_on:
+                pad = px * 0.12
+                p.setPen(Qt.NoPen)
+                p.setBrush(bg_col)
+                p.drawRoundedRect(
+                    QRectF(x - pad, y + (line_h - fm.height()) - pad * 0.3,
+                           total_w + pad * 2, fm.height() + pad * 0.6),
+                    4, 4,
+                )
+
+            cx = x
+            for k, i in enumerate(ln):
+                word = words[i]
+                col = highlight if i == self.HIGHLIGHT_INDEX else primary
+                path = QPainterPath()
+                path.addText(cx, baseline, font, word)
+                if outline_w > 0 and not bg_on:
+                    p.setPen(QPen(outline_col, outline_w * 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawPath(path)
+                p.setPen(Qt.NoPen)
+                p.setBrush(col)
+                p.drawPath(path)
+                cx += widths[k] + space_w
+
+        p.end()
+
+
+class VideoPreviewWidget(QWidget):
+    """Live preview of the selected video frame with captions and effects."""
+
+    SAMPLE_WORDS = ["YOUR", "CAPTIONS", "WILL", "LOOK", "LIKE", "THIS"]
+    HIGHLIGHT_INDEX = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._frame: Optional[np.ndarray] = None
+        self._cfg: dict = dict(get_preset("boxed_tiktok"))
+        self._effects: dict = {}
+        self._aspect = "9:16"
+        self.setMinimumSize(280, 420)
+        self.setStyleSheet("background: #1a1a1a; border-radius: 6px;")
+
+    def set_video_path(self, path: Optional[Path]):
+        if path and path.exists():
+            try:
+                import cv2
+                cap = cv2.VideoCapture(str(path))
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                mid = max(0, total // 2)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
+                ret, frame = cap.read()
+                cap.release()
+                self._frame = frame if ret else None
+            except Exception:
+                self._frame = None
+        else:
+            self._frame = None
+        self.update()
+
+    def set_style(self, cfg: dict):
+        self._cfg = cfg or {}
+        self.update()
+
+    def set_effects(self, effects: dict):
+        self._effects = effects or {}
+        self.update()
+
+    def set_aspect(self, aspect: str):
+        self._aspect = aspect
+        self.update()
+
+    def _parse_aspect(self) -> float:
+        a = self._aspect
+        if "9:16" in a or "Vertical" in a:
+            return 9 / 16
+        if "16:9" in a or "Landscape" in a:
+            return 16 / 9
+        if "4:3" in a:
+            return 4 / 3
+        if "1:1" in a or "Square" in a:
+            return 1.0
+        if "21:9" in a or "Ultrawide" in a:
+            return 21 / 9
+        return 9 / 16
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        ratio = self._parse_aspect()
+        avail_w = self.width() - 8
+        avail_h = self.height() - 8
+        if ratio >= 1:
+            frame_w = avail_w
+            frame_h = frame_w / ratio
+            if frame_h > avail_h:
+                frame_h = avail_h
+                frame_w = frame_h * ratio
+        else:
+            frame_h = avail_h
+            frame_w = frame_h * ratio
+            if frame_w > avail_w:
+                frame_w = avail_w
+                frame_h = frame_w / ratio
+        fx = (self.width() - frame_w) / 2
+        fy = (self.height() - frame_h) / 2
+        frame = QRectF(fx, fy, frame_w, frame_h)
+
+        if self._frame is not None:
+            fh, fw = self._frame.shape[:2]
+            frame_pix = QPixmap.fromImage(
+                QImage(
+                    cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB).data,
+                    fw, fh, fw * 3, QImage.Format_RGB888
+                )
+            ).scaled(int(frame_w), int(frame_h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            p.drawPixmap(int(fx + (frame_w - frame_pix.width()) / 2),
+                         int(fy + (frame_h - frame_pix.height()) / 2), frame_pix)
+        else:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#20242b"))
+            p.drawRoundedRect(frame, 10, 10)
+            p.setBrush(QColor("#2c313a"))
+            p.drawRoundedRect(QRectF(fx, fy, frame_w, frame_h * 0.55), 10, 10)
+
+        self._draw_captions(p, frame)
+
+    def _draw_captions(self, p: QPainter, frame: QRectF):
+        cfg = self._cfg
+        ratio = self._parse_aspect()
+        uppercase = bool(cfg.get("uppercase", True))
+        words = [w.upper() if uppercase else w.title() for w in self.SAMPLE_WORDS]
+
+        base_size = float(cfg.get("font_size", 80))
+        scale = frame.height() / 1080.0
+        px = max(9, int(round(base_size * scale)))
+        font = QFont(cfg.get("font_family", "Arial") or "Arial")
+        font.setPixelSize(px)
+        font.setBold(bool(cfg.get("bold", True)))
+        p.setFont(font)
+        fm = QFontMetrics(font)
+
+        max_chars = int(cfg.get("max_chars", 20) or 20)
+        max_lines = max(1, int(cfg.get("max_lines", 2) or 2))
+        lines: list[list[int]] = [[]]
+        cur_len = 0
+        for i, w in enumerate(words):
+            add = len(w) + (1 if lines[-1] else 0)
+            if lines[-1] and cur_len + add > max_chars and len(lines) < max_lines:
+                lines.append([i]); cur_len = len(w)
+            else:
+                lines[-1].append(i); cur_len += add
+        lines = [ln for ln in lines if ln]
+
+        primary = _hex_to_qcolor(cfg.get("primary_color", "#FFFFFF"))
+        highlight = _hex_to_qcolor(cfg.get("highlight_color", "#FFD400"), "#FFD400")
+        outline_px = float(cfg.get("outline_width", cfg.get("outline", 4)) or 0)
+        outline_w = max(0.0, outline_px * scale)
+        outline_col = _hex_to_qcolor(cfg.get("outline_color", "#000000"), "#000000")
+        bg_on = bool(cfg.get("background_enabled"))
+        bg_col = _hex_to_qcolor(cfg.get("background_color", "#000000"), "#000000")
+
+        line_h = fm.height()
+        space_w = fm.horizontalAdvance(" ")
+        block_h = line_h * len(lines)
+
+        position = cfg.get("position", "bottom")
+        margin = frame.height() * 0.06
+        if position == "top":
+            y0 = frame.top() + margin
+        elif position == "center":
+            y0 = frame.top() + (frame.height() - block_h) / 2
+        else:
             y0 = frame.bottom() - margin - block_h
 
         for li, ln in enumerate(lines):
@@ -536,11 +722,18 @@ class MainWindow(QMainWindow):
         jobs_layout.addWidget(self.jobs_list)
         tabs.addTab(jobs_tab, "Job History")
 
+        preview_tab = QWidget()
+        preview_layout = QVBoxLayout(preview_tab)
+        preview_layout.setContentsMargins(2, 2, 2, 2)
+        self.video_preview = VideoPreviewWidget()
+        preview_layout.addWidget(self.video_preview)
+        tabs.addTab(preview_tab, "Preview")
+
         right_layout.addWidget(tabs)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([400, 800])
+        splitter.setSizes([420, 820])
 
         main_layout.addWidget(splitter)
 
@@ -574,6 +767,15 @@ class MainWindow(QMainWindow):
         self.caption_position_combo.currentIndexChanged.connect(self._on_preset_or_position_changed)
         self._update_caption_preview()
 
+        # Live video preview — effects and aspect ratio changes.
+        self.grade_combo.currentTextChanged.connect(self._update_effects_preview)
+        for fx_cb in self.fx_checks.values():
+            fx_cb.toggled.connect(self._update_effects_preview)
+        self.aspect_combo.currentTextChanged.connect(
+            lambda txt: self.video_preview.set_aspect(txt)
+        )
+        self._update_effects_preview()
+
     def _on_preset_or_position_changed(self, *_):
         self._update_caption_preview()
 
@@ -600,8 +802,18 @@ class MainWindow(QMainWindow):
         return cfg
 
     def _update_caption_preview(self, *_):
+        style = self._current_caption_style()
         if hasattr(self, "caption_preview"):
-            self.caption_preview.set_style(self._current_caption_style())
+            self.caption_preview.set_style(style)
+        if hasattr(self, "video_preview"):
+            self.video_preview.set_style(style)
+
+    def _update_effects_preview(self, *_):
+        if hasattr(self, "video_preview"):
+            effects = {"grade": self.grade_combo.currentText()}
+            for fx_id, cb in self.fx_checks.items():
+                effects[fx_id] = cb.isChecked()
+            self.video_preview.set_effects(effects)
 
     # ---- AI Ranking helpers --------------------------------------------------
     def _current_provider(self) -> str:
@@ -734,6 +946,7 @@ class MainWindow(QMainWindow):
             self.video_path = Path(path)
             self.video_label.setText(self.video_path.name)
             logger.info("Video selected", path=path)
+            self.video_preview.set_video_path(self.video_path)
 
     def _select_output(self):
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
