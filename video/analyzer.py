@@ -95,10 +95,14 @@ class VideoAnalyzer:
 
         motion_config = self.config.get("motion_detection", {})
         if motion_config.get("enabled", True):
-            self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-                history=motion_config.get("history", 500),
-                varThreshold=motion_config.get("var_threshold", 16)
-            )
+            # CPU speedup: skip MOG2 bg subtraction on CPU-only machines — it's
+            # a heavy pixel-level model and motion is a minor scoring input.
+            skip_motion = not _cuda_ok and not motion_config.get("enable_on_cpu", False)
+            if not skip_motion:
+                self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+                    history=motion_config.get("history", 500),
+                    varThreshold=motion_config.get("var_threshold", 16)
+                )
 
     def analyze(
         self,

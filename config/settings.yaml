@@ -51,6 +51,7 @@ video:
     model: "resnet50"
   motion_detection:
     enabled: true
+    enable_on_cpu: false   # skip expensive MOG2 bg subtraction on CPU-only machines
     history: 500
     var_threshold: 16
   scene_detection:

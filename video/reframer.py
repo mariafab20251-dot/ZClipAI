@@ -149,9 +149,9 @@ class AutoReframer:
         prev_center_x = tracked_center_x
         prev_center_y = tracked_center_y
         frame_count = 0
-        # Detect faces once per second on GPU; every ~2s on CPU (the tracked
+        # Face detection every ~1s on GPU; every ~3s on CPU (the tracked
         # center is held between detections, so motion stays smooth either way).
-        base_interval = int(fps) if getattr(self, "_cuda_ok", True) else int(fps * 2)
+        base_interval = int(fps) if getattr(self, "_cuda_ok", True) else int(fps * 3)
         detect_interval = max(1, base_interval)
 
         while True:
