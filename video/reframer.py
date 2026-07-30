@@ -8,6 +8,24 @@ from utils.logging import get_logger, JobLogger
 
 logger = get_logger("reframer")
 
+# Cache NVENC availability (same probe as processor.py).
+_NVENC_CACHE: Optional[bool] = None
+
+
+def _nvenc_available() -> bool:
+    global _NVENC_CACHE
+    if _NVENC_CACHE is not None:
+        return _NVENC_CACHE
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _NVENC_CACHE = "h264_nvenc" in r.stdout
+    except Exception:
+        _NVENC_CACHE = False
+    return _NVENC_CACHE
+
 
 class AutoReframer:
     def __init__(self, shorts_config: Dict[str, Any], device: torch.device):
@@ -75,17 +93,24 @@ class AutoReframer:
         return output_path
 
     def _extract_clip(self, input_path: Path, start: float, end: float, output: Path, job_logger: JobLogger):
+        use_nvenc = _nvenc_available()
         cmd = [
             "ffmpeg", "-y",
             "-ss", str(start),
             "-i", str(input_path),
             "-t", str(end - start),
-            "-c:v", "libx264",
-            "-preset", "fast",
+            "-c:v", "h264_nvenc" if use_nvenc else "libx264",
+            "-preset", "p7" if use_nvenc else "fast",
+        ]
+        if use_nvenc:
+            cmd.extend(["-cq", "20", "-rc", "vbr", "-b:v", "0"])
+        else:
+            cmd.extend(["-crf", "20"])
+        cmd.extend([
             "-c:a", "aac",
             "-movflags", "+faststart",
             str(output)
-        ]
+        ])
         subprocess.run(cmd, capture_output=True, text=True, check=True)
 
     def _static_reframe(self, input_path: Path, output_path: Path, job_logger: JobLogger):
@@ -175,20 +200,26 @@ class AutoReframer:
         cap.release()
         out.release()
 
+        use_nvenc = _nvenc_available()
         cmd = [
             "ffmpeg", "-y",
             "-i", str(temp_output),
             "-i", str(input_path),
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "20",
+            "-c:v", "h264_nvenc" if use_nvenc else "libx264",
+            "-preset", "p7" if use_nvenc else "medium",
+        ]
+        if use_nvenc:
+            cmd.extend(["-cq", "20", "-rc", "vbr", "-b:v", "0"])
+        else:
+            cmd.extend(["-crf", "20"])
+        cmd.extend([
             "-c:a", "aac",
             "-b:a", "128k",
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-shortest",
             str(output_path)
-        ]
+        ])
         subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         if temp_output.exists():

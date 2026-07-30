@@ -5,6 +5,24 @@ import torch
 from utils.logging import get_logger, JobLogger
 from config import config
 
+# Cache NVENC availability so we only probe once per process.
+_NVENC_CACHE: Optional[bool] = None
+
+
+def _nvenc_available() -> bool:
+    global _NVENC_CACHE
+    if _NVENC_CACHE is not None:
+        return _NVENC_CACHE
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _NVENC_CACHE = "h264_nvenc" in r.stdout
+    except Exception:
+        _NVENC_CACHE = False
+    return _NVENC_CACHE
+
 logger = get_logger("video_processor")
 
 
@@ -19,6 +37,11 @@ class VideoProcessor:
         self.audio_bitrate = export_config.get("audio_bitrate", "128k")
         self.threads = export_config.get("threads", 4)
         self.hw_accel = export_config.get("hardware_accel", True) and device.type == "cuda"
+        # Auto-switch to NVENC when available — ~4x faster than libx264.
+        # Torch may be CPU-only in this venv, so check ffmpeg directly.
+        if export_config.get("hardware_accel", True) and _nvenc_available():
+            self.codec = "h264_nvenc"
+            self.preset = "p7"
 
     def export(
         self,
@@ -162,7 +185,12 @@ class VideoProcessor:
         cmd.extend([
             "-c:v", self.codec,
             "-preset", self.preset,
-            "-crf", str(self.crf),
+        ])
+        if self.codec == "h264_nvenc":
+            cmd.extend(["-cq", str(self.crf), "-rc", "vbr", "-b:v", "0"])
+        else:
+            cmd.extend(["-crf", str(self.crf)])
+        cmd.extend([
             "-c:a", self.audio_codec,
             "-b:a", self.audio_bitrate,
             "-threads", str(self.threads),
