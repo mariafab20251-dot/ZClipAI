@@ -1,33 +1,25 @@
-# AI Viral Clipper Configuration
-
 app:
-  name: "AI Viral Clipper"
-  version: "1.0.0"
-  log_level: "INFO"
-  cache_dir: "./cache"
-  temp_dir: "./temp"
-  output_dir: "./output"
-
-# GPU Settings
+  name: AI Viral Clipper
+  version: 1.0.0
+  log_level: INFO
+  cache_dir: ./cache
+  temp_dir: ./temp
+  output_dir: ./output
 gpu:
   enabled: true
   device_id: 0
   fallback_to_cpu: true
   memory_fraction: 0.8
-
-# Whisper Transcription
 whisper:
-  model: "large-v3"
-  device: "cuda"
-  compute_type: "float16"
-  language: "en"
+  model: large-v3
+  device: cuda
+  compute_type: float16
+  language: en
   beam_size: 1
   vad_filter: true
   vad_parameters:
     min_silence_duration_ms: 500
     speech_pad_ms: 400
-
-# Audio Analysis
 audio:
   sample_rate: 16000
   n_mfcc: 13
@@ -36,152 +28,134 @@ audio:
   vad_aggressiveness: 3
   min_speech_duration: 0.5
   max_silence_duration: 2.0
-
-# Video Analysis
 video:
-  sample_interval: 1.0        # frames to sample per second (0.5=2fps, 1.0=1fps, 2.0=every other sec)
-  cpu_sample_interval: 2.0    # used ONLY when face detection falls back to CPU (fewer samples = faster)
   face_detection:
-    model: "buffalo_l"
-    det_size: [640, 640]
-    cpu_det_size: [480, 480]  # smaller detector input on CPU-only machines (~1.8x faster/detect)
+    model: buffalo_l
+    det_size:
+    - 640
+    - 640
+    cpu_det_size:
+    - 480
+    - 480
     threshold: 0.5
   emotion_detection:
     enabled: false
-    model: "resnet50"
+    model: resnet50
   motion_detection:
     enabled: true
-    enable_on_cpu: false   # skip expensive MOG2 bg subtraction on CPU-only machines
+    enable_on_cpu: false
     history: 500
     var_threshold: 16
   scene_detection:
     enabled: true
     threshold: 0.3
     min_scene_length: 15
-
-# Viral Scoring Weights
 scoring:
-  hook_strength: 0.25
-  emotion_level: 0.20
-  retention_potential: 0.20
-  speech_energy: 0.15
-  visual_activity: 0.10
-  uniqueness: 0.10
-
-# Scoring Thresholds
-thresholds:
-  min_viral_score: 40
-  min_clip_duration: 15
-  max_clip_duration: 90
-  overlap_threshold: 0.1   # output clips may share at most 10% — avoids duplicate-feeling clips
-  min_gap_between_clips: 5.0
-
-# Shorts Optimization
+  weights:
+    hook_strength: 0.25
+    emotion_level: 0.2
+    retention_potential: 0.2
+    speech_energy: 0.15
+    visual_activity: 0.1
+    uniqueness: 0.1
+  thresholds:
+    min_viral_score: 40
+    min_clip_duration: 15
+    max_clip_duration: 1200
+    overlap_threshold: 0.1
+    min_gap_between_clips: 5.0
 shorts:
-  target_resolution: [1080, 1920]
-  aspect_ratio: "9:16"
+  target_resolution:
+  - 1080
+  - 1920
+  aspect_ratio: '9:16'
   face_tracking:
     enabled: true
     smoothing: 0.3
     zoom_factor: 1.2
-    cpu_det_size: [480, 480]  # smaller detector input when reframing on CPU-only machines
+    cpu_det_size:
+    - 480
+    - 480
   auto_reframe:
     enabled: true
     padding: 0.15
   auto_zoom:
     enabled: true
-    trigger_on: ["emotion_peak", "keyword", "gesture"]
-    zoom_range: [1.0, 1.5]
-
-# Subtitle Settings
+    trigger_on:
+    - emotion_peak
+    - keyword
+    - gesture
+    zoom_range:
+    - 1.0
+    - 1.5
 subtitles:
   enabled: true
-  # Preset style. Available presets (new caption engine):
-  #   bold_white, karaoke_yellow, minimal,
-  #   hormozi_green, hormozi_yellow, beast_red, raj_clean, alex_caps,
-  #   one_word_punch, word_reveal, bebas_clean, comic_bangers,
-  #   slab_impact, marker_note, serif_elegant, neon_pop,
-  #   boxed_tiktok, oswald_news, green_word
-  # Legacy names: tiktok -> boxed_tiktok, youtube/instagram -> bold_white
-  style: "boxed_tiktok"
-  # The fields below act as overrides on top of the chosen preset.
-  font_family: "Arial"
+  style: boxed_tiktok
+  font_family: Arial
   font_size: 60
-  font_color: "#FFFFFF"
-  outline_color: "#000000"
+  font_color: '#FFFFFF'
+  outline_color: '#000000'
   outline_width: 3
-  highlight_color: "#FFD700"
-  position: "bottom"
+  highlight_color: '#FFD700'
+  position: bottom
   margin_bottom: 150
   max_chars_per_line: 32
   word_level_highlight: true
   emoji_enabled: true
-  # Legacy platform-specific overrides — kept for backward compatibility.
   styles:
     tiktok:
-      font: "Montserrat"
+      font: Montserrat
       size: 65
-      color: "#FFFFFF"
-      highlight: "#FF2D55"
-      animation: "pop"
+      color: '#FFFFFF'
+      highlight: '#FF2D55'
+      animation: pop
     youtube:
-      font: "Roboto"
+      font: Roboto
       size: 58
-      color: "#FFFFFF"
-      highlight: "#FF0000"
-      animation: "fade"
+      color: '#FFFFFF'
+      highlight: '#FF0000'
+      animation: fade
     instagram:
-      font: "San Francisco"
+      font: San Francisco
       size: 60
-      color: "#FFFFFF"
-      highlight: "#E1306C"
-      animation: "slide"
-
-# Candidate Generation (overlapping, sentence-aware clip windows)
-candidates:
-  enabled: true
-  min_duration: 15.0      # shortest allowed candidate clip (s)
-  max_duration: 60.0      # longest allowed candidate clip (s)
-  stride: 6.0             # gap between window start points (s) — smaller = more overlap
-  merge_gap: 1.5          # merge adjacent sentences separated by < this (s)
-  tail_pad: 0.3           # breath added after the final word so the payoff lands (s)
-  snap_silence: 0.15      # snap boundaries to the nearest pause >= this (s)
-
-# Clip Selection
+      color: '#FFFFFF'
+      highlight: '#E1306C'
+      animation: slide
 selection:
   max_clips: 50
-  diversity_factor: 0.3   # 0 = pure score ranking, 1 = maximize timeline spread
+  diversity_factor: 0.3
   prefer_complete_sentences: true
   expand_boundaries: true
   boundary_expansion: 2.0
-  min_score_fallback: true  # if nothing clears the score threshold, still return top-N
-
-# Optional LLM re-ranking (Phase 2)
-# The free heuristic always runs. Turn this on to have an LLM re-judge the top
-# candidates for "would this actually go viral". Falls back silently to the
-# heuristic if disabled, no API key is set, or the call fails.
-# SECURITY: API keys are NOT stored here. Put them in a .env file (gitignored)
-# as GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY.
+  min_score_fallback: true
+candidates:
+  enabled: true
+  min_duration: 15.0
+  max_duration: 1200.0
+  stride: 6.0
+  merge_gap: 1.5
+  tail_pad: 0.3
+  snap_silence: 0.15
 llm:
   enabled: false
-  provider: "gemini"        # gemini | openai | anthropic
-  model: ""                 # blank = provider default picked at runtime
-  blend_weight: 0.6         # 0 = ignore LLM, 1 = trust LLM only
-  max_candidates: 25        # cost cap: only the top-N heuristic clips are sent
-  transcript_chars: 600     # per-clip transcript chars sent to the LLM
+  provider: gemini
+  model: ''
+  blend_weight: 0.6
+  max_candidates: 25
+  transcript_chars: 600
   timeout_seconds: 60.0
-
-# Export Settings
+  key_env:
+    gemini: GEMINI_API_KEY
+    openai: OPENAI_API_KEY
+    anthropic: ANTHROPIC_API_KEY
 export:
-  codec: "libx264"
-  preset: "medium"
+  codec: libx264
+  preset: medium
   crf: 20
-  audio_codec: "aac"
-  audio_bitrate: "128k"
+  audio_codec: aac
+  audio_bitrate: 128k
   threads: 4
   hardware_accel: true
-
-# Processing
 processing:
   max_workers: 4
   batch_size: 32

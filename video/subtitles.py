@@ -378,6 +378,15 @@ def build_ass(
     bg_on = bool(cfg.get("background_enabled"))
     border_style = 3 if bg_on else 1
     margin_v = int(round(video_h * 0.08))
+    # Y-Offset: match ChangeGUI convention (positive = move text DOWN).
+    y_off = int(cfg.get("y_offset", 0) or 0)
+    if y_off:
+        scaled = int(round(y_off * scale))
+        if alignment == 2:       # bottom: margin_v = distance from bottom edge
+            margin_v = max(0, margin_v - scaled)   # positive y_off = less margin = move down
+        elif alignment == 8:     # top: margin_v = distance from top edge
+            margin_v = max(0, margin_v + scaled)   # positive y_off = more margin = move down
+        # center alignment (5) — handled per-dialogue via \pos() override if needed
 
     primary = _hex_to_ass(cfg["primary_color"])
     highlight = _hex_to_ass(cfg["highlight_color"])

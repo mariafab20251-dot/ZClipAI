@@ -25,6 +25,7 @@ logs/
 output/
 data/
 models/
+ui_state.json
 
 # ---- Large binaries ----
 *.mp4

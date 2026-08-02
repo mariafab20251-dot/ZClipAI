@@ -114,11 +114,19 @@ class AutoReframer:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
 
     def _static_reframe(self, input_path: Path, output_path: Path, job_logger: JobLogger):
+        # Honor the selected aspect ratio (target_width:target_height) instead of a
+        # hardcoded 9:16. Center-crop the source to the target ratio, then scale to
+        # the exact target resolution so the output truly fits the requested shape.
+        target_ratio = self.target_width / self.target_height
         cmd = [
             "ffmpeg", "-y",
             "-i", str(input_path),
             "-vf",
-            f"crop=ih*9/16:ih,scale={self.target_width}:{self.target_height}",
+            (
+                f"crop='if(gt(a,{target_ratio}),ih*{target_ratio},iw)':"
+                f"'if(gt(a,{target_ratio}),ih,iw/{target_ratio})',"
+                f"scale={self.target_width}:{self.target_height}"
+            ),
             "-c:a", "copy",
             str(output_path)
         ]

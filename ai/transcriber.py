@@ -24,15 +24,40 @@ class Transcriber:
         compute_type = self.config.get("compute_type", "float16")
         model_name = self.config.get("model", "large-v3")
 
-        # Map model name to local cache path under download_root
+        # Map model name to local cache path under download_root.
+        # Distil models live under a different HuggingFace repo
+        # (Systran/faster-distil-whisper-*, not faster-whisper-*), so the
+        # name has to be re-shaped before building the cache folder.
         if "/" not in model_name:
-            hf_id = f"Systran/faster-whisper-{model_name}"
+            if model_name.startswith("distil-"):
+                hf_id = f"Systran/faster-distil-whisper-{model_name[len('distil-'):]}"
+            else:
+                hf_id = f"Systran/faster-whisper-{model_name}"
         else:
             hf_id = model_name
         cache_folder = hf_id.replace("/", "--")
-        local_model_path = Path(f"./models/whisper/{cache_folder}")
 
-        if local_model_path.exists() and (local_model_path / "model.bin").exists():
+        # Local cache lives under download_root in two possible layouts:
+        #   A. HF-cache layout (what faster-whisper writes when it downloads):
+        #        ./models/whisper/models--<repo with dashes>/snapshots/<hash>/model.bin
+        #   B. Flat CTranslate2 folder with model.bin at the root:
+        #        ./models/whisper/<repo with dashes>/model.bin
+        # Resolve whichever is present so a downloaded model loads offline
+        # without a huggingface_hub round-trip.
+        hf_cache_dir = Path("./models/whisper") / f"models--{cache_folder}"
+        flat_dir = Path("./models/whisper") / cache_folder
+
+        local_model_path = None
+        if (flat_dir / "model.bin").is_file():
+            local_model_path = flat_dir
+        elif hf_cache_dir.exists():
+            _snaps = sorted(hf_cache_dir.glob("snapshots/*"))
+            if _snaps and (_snaps[0] / "model.bin").is_file():
+                local_model_path = _snaps[0]
+            elif (hf_cache_dir / "model.bin").is_file():
+                local_model_path = hf_cache_dir
+
+        if local_model_path is not None:
             model_path = str(local_model_path)
             logger.info("Loading Whisper model from local path", path=model_path, device=device, compute_type=compute_type)
         else:

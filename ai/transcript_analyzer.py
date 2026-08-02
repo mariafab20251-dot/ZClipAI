@@ -58,7 +58,17 @@ class TranscriptAnalyzer:
         try:
             self.nlp = spacy.load("en_core_web_sm")
         except OSError:
-            logger.warning("spaCy model not found, using basic analysis")
+            # LOUD on purpose: without this model, keywords/entities come back
+            # empty and the retention + uniqueness components of every viral
+            # score silently deflate (a full 20% of the total). The original
+            # code fell back quietly and nobody noticed scores were broken.
+            logger.error(
+                "!!! spaCy model 'en_core_web_sm' NOT FOUND — keyword & entity "
+                "scoring DISABLED. Viral scores will be wrong (retention & "
+                "uniqueness deflated). Fix: run "
+                "`python -m spacy download en_core_web_sm` in the app venv, "
+                "then restart. Falling back to keyword-free analysis."
+            )
             self.nlp = None
 
     def analyze(self, transcript: List[TranscriptSegment], job_logger: JobLogger) -> Dict[str, Any]:
@@ -70,6 +80,15 @@ class TranscriptAnalyzer:
         }
 
         all_text = " ".join(s.text for s in transcript)
+
+        # Surface the degraded-analysis state in the JOB log (Processing Log
+        # tab) too, not just the module logger — this is the one the user sees.
+        if self.nlp is None:
+            job_logger.warning(
+                "spaCy en_core_web_sm missing — keyword/entity features are "
+                "OFF; retention & uniqueness scores will be deflated. "
+                "Install with: python -m spacy download en_core_web_sm"
+            )
 
         for segment in transcript:
             analysis = self._analyze_segment(segment, all_text)

@@ -11,7 +11,7 @@ class SegmentSelector:
         self.thresholds = thresholds
         self.min_score = thresholds.get("min_viral_score", 40)
         self.min_duration = target_duration or thresholds.get("min_clip_duration", 15)
-        self.max_duration = thresholds.get("max_clip_duration", 90)
+        self.max_duration = thresholds.get("max_clip_duration", 1200)
         self.overlap_threshold = thresholds.get("overlap_threshold", 0.3)
         self.min_gap = thresholds.get("min_gap_between_clips", 5.0)
         self.expand_boundaries = selection_config.get("expand_boundaries", True)

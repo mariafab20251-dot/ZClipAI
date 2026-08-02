@@ -5,6 +5,22 @@ import torch
 from utils.logging import get_logger, JobLogger
 from config import config
 
+
+def _subtitles_filter(subtitle_path) -> str:
+    """Build a `subtitles=` filter string that points libass at the app's bundled
+    font directory (assets/fonts). Without fontsdir, libass only searches
+    system-installed fonts and silently falls back to a default face — which is
+    why preset fonts like "Luckiest Guy" rendered as Arial in the final video."""
+    sub_path_str = str(subtitle_path).replace("\\", "/")
+    filter_path = sub_path_str.replace(":", "\\:")
+    try:
+        from video.fonts import FONTS_DIR
+        fonts_dir = str(FONTS_DIR).replace("\\", "/").replace(":", "\\:")
+        return f"subtitles='{filter_path}':fontsdir='{fonts_dir}'"
+    except Exception:
+        return f"subtitles='{filter_path}'"
+
+
 # Cache NVENC availability so we only probe once per process.
 _NVENC_CACHE: Optional[bool] = None
 
@@ -51,6 +67,7 @@ class VideoProcessor:
         job_logger: JobLogger,
         effects_config: Optional[Dict[str, Any]] = None,
         music_config: Optional[Dict[str, Any]] = None,
+        border_config: Optional[Dict[str, Any]] = None,
     ) -> Path:
         """Export video with optional cinematic effects + burned-in subtitles + background music.
 
@@ -62,6 +79,7 @@ class VideoProcessor:
             effects_config: Optional cinematic effects dict (see video/effects.py).
             music_config: Optional background-music dict with keys:
                 music_path (str), volume (float), duck_amount (float).
+            border_config: Optional dict with keys: enabled (bool), color (str), size (int).
 
         Returns:
             Path to the exported file.
@@ -70,7 +88,7 @@ class VideoProcessor:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = self._build_ffmpeg_command(video_path, subtitle_path, output_path, effects_config, music_config)
+        cmd = self._build_ffmpeg_command(video_path, subtitle_path, output_path, effects_config, music_config, border_config)
 
         # Log the actual ffmpeg command for debugging
         job_logger.info("FFmpeg command: " + " ".join(str(c) for c in cmd))
@@ -102,6 +120,7 @@ class VideoProcessor:
         output_path: Path,
         effects_config: Optional[Dict[str, Any]] = None,
         music_config: Optional[Dict[str, Any]] = None,
+        border_config: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         from video.effects import build_cinematic_stages
         from video.music_mixer import build_mixer_filter
@@ -109,13 +128,14 @@ class VideoProcessor:
         cmd = ["ffmpeg", "-y"]
 
         has_sub = subtitle_path and subtitle_path.exists()
+        has_border = bool(border_config and border_config.get("enabled", False))
         has_effects = bool(effects_config and any(
             v for k, v in effects_config.items() if k != "enabled" and v
         ))
         has_music = bool(music_config and music_config.get("music_path"))
 
-        # Hardware acceleration — disabled when burning subtitles, effects, or music
-        if self.hw_accel and not has_sub and not has_effects and not has_music:
+        # Hardware acceleration — disabled when burning subtitles, effects, border, or music
+        if self.hw_accel and not has_sub and not has_border and not has_effects and not has_music:
             cmd.extend(["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"])
 
         cmd.extend(["-i", str(video_path)])
@@ -148,24 +168,36 @@ class VideoProcessor:
             fx_stages, fx_out = build_cinematic_stages(effects_config, "0:v", vw, vh)
             if fx_stages:
                 needs_filter_complex = True
-                stages = fx_stages
+                stages.extend(fx_stages)
                 video_out = f"[{fx_out}]"
 
         # Append subtitle burn as the final video stage (only if using filter_complex
         # or music forces us into filter_complex mode).
         if has_sub and (needs_filter_complex or has_effects):
             needs_filter_complex = True
-            sub_path_str = str(subtitle_path).replace("\\", "/")
-            filter_path = sub_path_str.replace(":", "\\:")
+            sub_filter = _subtitles_filter(subtitle_path)
             # If no video stages yet, start from raw input
             if not stages:
-                stages.append(f"[0:v]subtitles='{filter_path}'[outv]")
-                video_out = "[outv]"
+                stages.append(f"[0:v]{sub_filter}[drwv]")
+                video_out = "[drwv]"
             else:
                 # Strip any bracket from video_out for the input label
                 in_label = video_out.strip("[]") if video_out.startswith("[") else video_out
-                stages.append(f"[{in_label}]subtitles='{filter_path}'[outv]")
-                video_out = "[outv]"
+                stages.append(f"[{in_label}]{sub_filter}[drwv]")
+                video_out = "[drwv]"
+
+        # Append border overlay (drawbox) as the last video stage.
+        if has_border:
+            needs_filter_complex = True
+            bc_color = border_config.get("color", "#FFFFFF").lstrip("#")
+            bc_thick = max(1, int(border_config.get("size", 4)))
+            # Use the current video_out as input; create a new label
+            in_label = video_out.strip("[]") if video_out.startswith("[") else video_out
+            # drawbox strokes inward from the rectangle edges, so a full-frame
+            # rectangle draws a visible border on all 4 sides (drawgrid clips the
+            # right/bottom lines at the frame edge -> only top+left showed).
+            stages.append(f"[{in_label}]drawbox=x=0:y=0:w=iw:h=ih:color=0x{bc_color}@1:t={bc_thick}[bordv]")
+            video_out = "[bordv]"
 
         # Append audio mixing to the same filter_complex (if music is enabled).
         if music_filter_str:
@@ -176,11 +208,17 @@ class VideoProcessor:
             cmd.extend(["-filter_complex", ";".join(stages)])
             cmd.extend(["-map", video_out, "-map", music_audio_out])
         else:
-            # Simple path: just subtitles or raw passthrough (no music).
+            # Simple path: subtitles and/or border (no music/effects).
+            vf_filter = ""
             if has_sub:
-                sub_path_str = str(subtitle_path).replace("\\", "/")
-                filter_path = sub_path_str.replace(":", "\\:")
-                cmd.extend(["-vf", f"subtitles='{filter_path}'"])
+                vf_filter = _subtitles_filter(subtitle_path)
+            if has_border:
+                bc_color = border_config.get("color", "#FFFFFF").lstrip("#")
+                bc_thick = max(1, int(border_config.get("size", 4)))
+                border_vf = f"drawbox=x=0:y=0:w=iw:h=ih:color=0x{bc_color}@1:t={bc_thick}"
+                vf_filter = f"{vf_filter},{border_vf}" if vf_filter else border_vf
+            if vf_filter:
+                cmd.extend(["-vf", vf_filter])
 
         cmd.extend([
             "-c:v", self.codec,

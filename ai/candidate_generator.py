@@ -32,7 +32,7 @@ class CandidateGenerator:
     def __init__(self, config: Dict[str, Any]):
         self.enabled = config.get("enabled", True)
         self.min_duration = float(config.get("min_duration", 15.0))
-        self.max_duration = float(config.get("max_duration", 60.0))
+        self.max_duration = float(config.get("max_duration", 1200.0))
         self.stride = float(config.get("stride", 6.0))
         self.merge_gap = float(config.get("merge_gap", 1.5))
         self.tail_pad = float(config.get("tail_pad", 0.3))
@@ -123,11 +123,25 @@ class CandidateGenerator:
 
         # Targets we try to land each window's end on, per anchor.
         mid = (self.min_duration + self.max_duration) / 2
-        target_lengths = sorted({self.min_duration, target_duration or mid, mid, self.max_duration})
+        if target_duration and target_duration != mid:
+            # User explicitly set a duration — only target that value.
+            # Don't seed min_duration here; that creates unwanted short clips.
+            target_lengths = [target_duration]
+        else:
+            target_lengths = sorted({self.min_duration, target_duration or mid, mid, self.max_duration})
 
         seen: set = set()
         candidates: List[TranscriptSegment] = []
         last_anchor_start = -1e9
+
+        # When the user explicitly set a target length, don't accept windows that
+        # fall far short of it (e.g. tail anchors near the end of the video that can
+        # only reach a few seconds). Enforce a floor of 70% of the requested target
+        # so a 160s request stops emitting 20s clips.
+        if target_duration and target_duration != mid:
+            effective_min = max(self.min_duration, 0.7 * target_duration)
+        else:
+            effective_min = self.min_duration
 
         for si, sent in enumerate(sentences):
             # Thin anchors by stride to bound candidate count / overlap.
@@ -140,7 +154,7 @@ class CandidateGenerator:
                 if ei is None:
                     continue
                 dur = sentences[ei].end - sent.start
-                if dur < self.min_duration - 1e-6 or dur > self.max_duration + 1e-6:
+                if dur < effective_min - 1e-6 or dur > self.max_duration + 1e-6:
                     continue
                 key = (round(sent.start, 2), round(sentences[ei].end, 2))
                 if key in seen:

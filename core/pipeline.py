@@ -319,6 +319,18 @@ class Pipeline:
         # Apply caption preset + font from job.config on top of yaml defaults
         sub_cfg = dict(config.get_section("subtitles"))
         job_cfg = job.config if isinstance(job.config, dict) else {}
+
+        # The yaml `subtitles` section bakes in default visual fields (white text,
+        # yellow highlight, black outline, bottom position, a stock font). The ASS
+        # engine applies EVERY one of these as an override on top of the chosen
+        # preset — which smothered each preset's own styling so every preset
+        # rendered as the same white+yellow caption. Drop them here so the selected
+        # preset controls appearance; only the user's EXPLICIT UI overrides (below)
+        # are layered back on. This mirrors the live preview's _current_caption_style.
+        for _k in ("font_color", "highlight_color", "outline_color",
+                   "outline_width", "position", "font_family", "font_size"):
+            sub_cfg.pop(_k, None)
+
         if job_cfg.get("caption_preset"):
             sub_cfg["style"] = job_cfg["caption_preset"]
         if job_cfg.get("font_family"):
@@ -331,6 +343,8 @@ class Pipeline:
             sub_cfg["font_size"] = job_cfg["caption_size"]
         if job_cfg.get("caption_position"):
             sub_cfg["position"] = job_cfg["caption_position"]
+        if "caption_y_offset" in job_cfg:
+            sub_cfg["y_offset"] = job_cfg["caption_y_offset"]
         subtitle_gen = SubtitleGenerator(sub_cfg)
 
         final_clips = []
@@ -374,6 +388,9 @@ class Pipeline:
                 effects_cfg["target_width"] = res_map.get(aspect_text, (1080, 1920))[0]
                 effects_cfg["target_height"] = res_map.get(aspect_text, (1080, 1920))[1]
 
+            # Check for border config.
+            border_cfg = job_cfg.get("border") if isinstance(job.config, dict) else None
+
             # Check for background music config.
             music_cfg: Optional[dict] = None
             raw_music = job.config.get("music") if isinstance(job.config, dict) else None
@@ -385,13 +402,25 @@ class Pipeline:
                     volume=music_cfg.get("volume", 0.3),
                 )
 
+            # ── Frame-level blur pre-process (OpenCV, same as preview) ──────
+            blur_cfg = job_cfg.get("blur")
+            if blur_cfg and blur_cfg.get("enabled", False):
+                blurred_path = self._apply_blur_to_video(
+                    reframed_path, blur_cfg, job_logger,
+                    job.output_dir / f"{job.id}_clip_{clip.id}_blurred.mp4",
+                )
+                video_input = blurred_path
+            else:
+                video_input = reframed_path
+
             final_path = processor.export(
-                reframed_path,
+                video_input,
                 subtitle_path,
                 job.output_dir / f"{job.id}_clip_{clip.id}_final.mp4",
                 job_logger,
                 effects_config=effects_cfg,
                 music_config=music_cfg,
+                border_config=border_cfg,
             )
 
             clip.output_path = final_path
@@ -409,12 +438,122 @@ class Pipeline:
                         f.unlink()
                     except Exception:
                         pass
-            # Also clean up .ass subtitle file if it exists
+            # Also clean up .ass subtitle and blurred temp file
             ass_path = (job.output_dir / f"{job.id}_clip_{clip.id}_subtitles.ass")
             if ass_path.exists():
                 try:
                     ass_path.unlink()
                 except Exception:
                     pass
+            blur_tmp = (job.output_dir / f"{job.id}_clip_{clip.id}_blurred.mp4")
+            if blur_tmp.exists():
+                try:
+                    blur_tmp.unlink()
+                except Exception:
+                    pass
 
         return final_clips
+
+    def _apply_blur_to_video(
+        self,
+        input_path: Path,
+        blur_cfg: dict,
+        job_logger: JobLogger,
+        output_path: Path,
+    ) -> Path:
+        """Apply region blur frame-by-frame with OpenCV (same as preview widget)."""
+        import cv2
+        import numpy as np
+
+        cap = cv2.VideoCapture(str(input_path))
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open {input_path} for blur processing")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+
+        intensity = max(1, int(blur_cfg.get("intensity", 15)))
+        ksize = max(3, intensity // 3 * 2 + 1)
+        tint_on = blur_cfg.get("tint_enabled", False)
+        tint_hex = blur_cfg.get("tint_color", "#000000")
+        tint_op = int(blur_cfg.get("tint_opacity", 50))
+        sides = blur_cfg.get("sides", {})
+
+        # Pre-build blur rectangles from the side config.
+        rects = []
+        for side, sc in sides.items():
+            if not sc.get("enabled", False):
+                continue
+            pct = max(0, min(100, int(sc.get("size", 30)))) / 100.0
+            if side == "top":
+                rects.append((0, 0, w, int(h * pct)))
+            elif side == "bottom":
+                rects.append((0, h - int(h * pct), w, h))
+            elif side == "left":
+                rects.append((0, 0, int(w * pct), h))
+            elif side == "right":
+                rects.append((w - int(w * pct), 0, w, h))
+            elif side == "center":
+                bw, bh = int(w * pct), int(h * pct)
+                rects.append(((w - bw) // 2, (h - bh) // 2, (w + bw) // 2, (h + bh) // 2))
+
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            for x1, y1, x2, y2 in rects:
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                roi = frame_rgb[y1:y2, x1:x2]
+                if roi.size == 0:
+                    continue
+                blurred = cv2.GaussianBlur(roi, (ksize, ksize), 0)
+                if tint_on:
+                    try:
+                        tc = tuple(int(tint_hex.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+                    except Exception:
+                        tc = (0, 0, 0)
+                    alpha = max(0, min(1.0, tint_op / 100.0))
+                    blurred = (blurred * (1 - alpha) + np.array(tc, dtype=np.uint8) * alpha).astype(np.uint8)
+                frame_rgb[y1:y2, x1:x2] = blurred
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            out.write(frame_bgr)
+            frame_count += 1
+
+        cap.release()
+        out.release()
+
+        # Copy audio from the original reframed video — cv2.VideoWriter writes
+        # video-only (no audio stream), which would make the final export silent.
+        audio_fixed = output_path.parent / f"{output_path.stem}_audiofixed{output_path.suffix}"
+        try:
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", str(output_path),        # video from OpenCV (no audio)
+                    "-i", str(input_path),         # original reframed (has audio)
+                    "-c:v", "copy",                # keep OpenCV-processed video
+                    "-c:a", "aac",                 # encode audio
+                    "-map", "0:v:0",               # video from blurred file
+                    "-map", "1:a:0",               # audio from original reframed
+                    "-shortest",
+                    str(audio_fixed),
+                ],
+                capture_output=True, text=True, timeout=300,
+            )
+            if audio_fixed.exists():
+                output_path.unlink(missing_ok=True)
+                audio_fixed.rename(output_path)
+                job_logger.info("Audio copied into blurred video", path=str(output_path))
+        except Exception as e:
+            job_logger.warning("Audio copy failed, blur export will be silent", error=str(e))
+
+        return output_path

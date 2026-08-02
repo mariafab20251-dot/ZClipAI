@@ -63,7 +63,7 @@ class ScoringConfig(BaseModel):
     thresholds: Dict[str, Any] = Field(default_factory=lambda: {
         "min_viral_score": 40,
         "min_clip_duration": 15,
-        "max_clip_duration": 90,
+        "max_clip_duration": 1200,
         "overlap_threshold": 0.1,
         "min_gap_between_clips": 5.0
     })
@@ -139,7 +139,7 @@ class SelectionConfig(BaseModel):
 class CandidatesConfig(BaseModel):
     enabled: bool = True
     min_duration: float = 15.0
-    max_duration: float = 60.0
+    max_duration: float = 1200.0
     stride: float = 6.0
     merge_gap: float = 1.5
     tail_pad: float = 0.3

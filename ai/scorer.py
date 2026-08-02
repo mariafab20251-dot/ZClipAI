@@ -112,7 +112,16 @@ class ViralScorer:
         humor = analysis.get("humor_score", 0)
 
         duration = segment.end - segment.start
-        duration_score = 1.0 if 15 <= duration <= 60 else 0.5
+        # Length-agnostic: long-form clips (e.g. 2-3 minute shorts) are a
+        # legitimate target, so a long clip isn't penalized for being long.
+        # Only the pathological extremes get docked (sub-10s, or >4x the 60s
+        # 'short' band), and even then gently.
+        if duration < 10:
+            duration_score = 0.5
+        elif duration > 240:
+            duration_score = 0.8
+        else:
+            duration_score = 1.0
 
         keywords = analysis.get("keywords", [])
         keyword_density = min(len(keywords) / 10, 1.0)
